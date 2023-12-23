@@ -1,8 +1,10 @@
-pub const MEM_SIZE: usize = 0xFFFF;
+pub const MEM_SIZE: MemAddress = 0xFFFF;
+
+pub type MemAddress = u16;
 
 pub struct VM {
-    memory: [u8; MEM_SIZE],
-    pc: usize,
+    memory: [u8; MEM_SIZE as usize],
+    pc: MemAddress,
 
     register_accumulator: u8,
     register_x: u8,
@@ -37,7 +39,6 @@ pub enum ProgramError {
 type ProgramResult<V = ()> = Result<V, ProgramError>;
 
 enum AddressingMode {
-    Accumulator,
     Immediate,
     ZeroPage,
     ZeroPageX,
@@ -47,14 +48,14 @@ enum AddressingMode {
     AbsoluteX,
     AbsoluteY,
     Indirect,
-    IndexedIndirect,
-    IndirectIndexed,
+    IndirectX,
+    IndirectY,
 }
 
 impl VM {
     pub fn new() -> Self {
         Self {
-            memory: [0; MEM_SIZE],
+            memory: [0; MEM_SIZE as usize],
             pc: 0,
             register_accumulator: 0,
             register_x: 0,
@@ -71,7 +72,14 @@ impl VM {
     pub fn run(&mut self) -> ProgramResult {
         loop {
             match self.next_instruction()? {
-                0xA9 => self.lda_immediate()?,
+                0xA9 => self.lda(AddressingMode::Immediate)?,
+                0xA5 => self.lda(AddressingMode::ZeroPage)?,
+                0xB5 => self.lda(AddressingMode::ZeroPageX)?,
+                0xAD => self.lda(AddressingMode::Absolute)?,
+                0xBD => self.lda(AddressingMode::AbsoluteX)?,
+                0xB9 => self.lda(AddressingMode::AbsoluteY)?,
+                0xA1 => self.lda(AddressingMode::IndirectX)?,
+                0xB1 => self.lda(AddressingMode::IndirectY)?,
                 0xAA => self.tax()?,
                 0xE8 => self.inx()?,
                 00 => {
@@ -84,10 +92,7 @@ impl VM {
     }
 
     fn next_instruction(&mut self) -> Result<u8, ProgramError> {
-        if self.pc >= MEM_SIZE {
-            return Err(ProgramError::EOF);
-        }
-        let result = self.memory[self.pc];
+        let result = self.memory[self.pc as usize];
         self.pc += 1;
         Ok(result)
     }
@@ -98,75 +103,70 @@ impl VM {
         Ok(high << 8 | low)
     }
 
-    fn lda_immediate(&mut self) -> ProgramResult {
-        self.register_accumulator = self.next_instruction()?;
-        self.set_status(self.register_accumulator);
-        Ok(())
-    }
-
     fn lda(&mut self, addressing_mode: AddressingMode) -> ProgramResult {
-        self.register_accumulator = self.address_memory(addressing_mode)?;
+        let addr = self.get_operand_address(addressing_mode)?;
+        self.register_accumulator = self.read_memory(addr)?;
         self.set_status(self.register_accumulator);
         Ok(())
     }
 
-    fn address_memory(&mut self, mode: AddressingMode) -> ProgramResult<u8> {
-        let v = match mode {
-            AddressingMode::Accumulator => {
-                unreachable!()
-            }
+    fn get_operand_address(&mut self, mode: AddressingMode) -> ProgramResult<MemAddress> {
+        match mode {
             AddressingMode::Immediate => {
-                self.next_instruction()?
+                let addr = self.pc;
+                self.pc += 1;
+                Ok(addr)
             }
             AddressingMode::ZeroPage => {
-                let addr = self.next_instruction()? as u16;
-                self.read_memory(addr)?
+                Ok(self.next_instruction()? as MemAddress)
             }
             AddressingMode::ZeroPageX => {
                 let (addr, _) = self.next_instruction()?.overflowing_add(self.register_x);
-                self.read_memory(addr as u16)?
+                Ok(addr as MemAddress)
             }
             AddressingMode::ZeroPageY => {
                 let (addr, _) = self.next_instruction()?.overflowing_add(self.register_y);
-                self.read_memory(addr as u16)?
+                Ok(addr as MemAddress)
             }
             AddressingMode::Relative => {
                 let offset = self.next_instruction()?;
-                if offset & 0b1000_0000 == 0x00 {
-                    self.pc + offset
+                let addr = if offset & 0b1000_0000 == 0x00 {
+                    self.pc + (offset as MemAddress)
                 } else {
-                    self.pc - (offset & 0b0111_1111)
-                }
+                    self.pc - (offset & 0b0111_1111) as MemAddress
+                };
+                Ok(addr)
             }
             AddressingMode::Absolute => {
-                self.read_memory(self.next_u16()?)
+                self.next_u16()
             }
             AddressingMode::AbsoluteX => {
-                let (addr, _) = self.next_u16()?.overflowing_add(self.register_x as u16);
-                self.read_memory(addr)
+                let (addr, _) = self.next_u16()?.overflowing_add(self.register_x as MemAddress);
+                Ok(addr)
             }
             AddressingMode::AbsoluteY => {
-                let (addr, _) = self.next_u16()?.overflowing_add(self.register_y as u16);
-                self.read_memory(addr)
+                let (addr, _) = self.next_u16()?.overflowing_add(self.register_x as MemAddress);
+                Ok(addr)
             }
             AddressingMode::Indirect => {
                 let addr = self.next_u16()?;
                 let low = self.read_memory(addr)? as u16;
                 let high = self.read_memory(addr + 1)? as u16;
-                high << 8 | low
+                Ok(high << 8 | low)
             }
-            AddressingMode::IndexedIndirect => {
+            AddressingMode::IndirectX => {
                 let (addr, _) = self.next_instruction()?.overflowing_add(self.register_x);
-                let addr = self.read_memory(addr as u16)?;
-                self.read_memory(addr as u16)
+                let low = self.read_memory(addr as u16)? as u16;
+                let high = self.read_memory(addr as u16 + 1)? as u16;
+                Ok(high << 8 | low)
             }
-            AddressingMode::IndirectIndexed => {
+            AddressingMode::IndirectY => {
                 let (addr, _) = self.next_instruction()?.overflowing_add(self.register_y);
-                let addr = self.read_memory(addr as u16)?;
-                self.read_memory(addr as u16)
+                let low = self.read_memory(addr as u16)? as u16;
+                let high = self.read_memory(addr as u16 + 1)? as u16;
+                Ok(high << 8 | low)
             }
-        };
-        Ok(v)
+        }
     }
 
     fn tax(&mut self) -> ProgramResult {
