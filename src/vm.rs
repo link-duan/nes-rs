@@ -14,6 +14,7 @@ pub struct VM {
 }
 
 #[derive(Default)]
+#[allow(unused)]
 pub struct Flags {
     carry: bool,
     zero: bool,
@@ -38,6 +39,7 @@ pub enum ProgramError {
 
 type ProgramResult<V = ()> = Result<V, ProgramError>;
 
+#[allow(unused)]
 enum AddressingMode {
     Immediate,
     ZeroPage,
@@ -82,6 +84,8 @@ impl VM {
                 0xB1 => self.lda(AddressingMode::IndirectY)?,
                 0xAA => self.tax()?,
                 0xE8 => self.inx()?,
+                0x4C => self.jmp(AddressingMode::Absolute)?,
+                0x6C => self.jmp(AddressingMode::Indirect)?,
                 00 => {
                     break;
                 }
@@ -101,6 +105,12 @@ impl VM {
         let low = self.next_instruction()? as u16;
         let high = self.next_instruction()? as u16;
         Ok(high << 8 | low)
+    }
+
+    fn jmp(&mut self, addressing_mode: AddressingMode) -> ProgramResult {
+        let addr = self.get_operand_address(addressing_mode)?;
+        self.pc = addr;
+        Ok(())
     }
 
     fn lda(&mut self, addressing_mode: AddressingMode) -> ProgramResult {

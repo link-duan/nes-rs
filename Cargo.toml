@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 thiserror = "*"
+nom = { version = "7" }
+strum = { features = ["derive"], version = "0.25" }
