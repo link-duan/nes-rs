@@ -1,9 +1,9 @@
 use nom::branch::alt;
-use nom::bytes::complete::{is_a, tag, take_while1};
-use nom::character::complete::{alpha0, hex_digit1, multispace0};
+use nom::bytes::complete::{is_a, tag, take_till, take_while1};
+use nom::character::complete::{alpha0, hex_digit1, line_ending, multispace0};
 use nom::combinator::eof;
-use nom::multi::{many1, many_till, separated_list0};
-use nom::sequence::{delimited, preceded, Tuple};
+use nom::multi::{many0, many1, many_till, separated_list0};
+use nom::sequence::{delimited, pair, preceded, Tuple};
 
 pub struct Program {
     pub instructions: Vec<Instruction>,
@@ -94,20 +94,28 @@ type ParserResult<'a, O = Instruction> = nom::IResult<&'a str, O>;
 
 /// parse 6502 ASM code
 pub fn parse(code: &str) -> ParserResult<Program> {
-    // TODO: parsing comments
-    let (remain, (instructions, _)) = many_till(parse_instruction, eof)(code)?;
+    let (remain, (instructions, _)) = many_till(parse_instruction, preceded(pair(many0(comments), multispace0), eof))(code)?;
     let program = Program { instructions };
     Ok((remain, program))
 }
 
+fn comments(code: &str) -> ParserResult<&str> {
+    let (code, _) = multispace0(code)?;
+    let (code, comments) = preceded(tag(";"), take_till(|c| c == '\n'))(code)?;
+    Ok((code, comments))
+}
+
 fn parse_instruction(code: &str) -> ParserResult {
+    let (code, _) = many0(comments)(code)?;
+    let (code, _) = multispace0(code)?;
     let (code, operator) = parse_operator(code)?;
     let (code, operands) = parse_operands(code)?;
+    let (code, _) = many0(comments)(code)?;
+    let (code, _) = alt((line_ending, eof))(code)?;
     Ok((code, Instruction { operator, operands }))
 }
 
 fn parse_operator(code: &str) -> ParserResult<Operator> {
-    let (code, _) = multispace0(code)?;
     let (code, operator) = alpha0(code)?;
     let operator = Operator::try_from(operator).map_err(|_e| nom::Err::Error(nom::error::make_error(operator, nom::error::ErrorKind::Fail)))?;
     Ok((code, operator))
@@ -250,8 +258,17 @@ mod tests {
 
     #[test]
     fn test_parse_program() {
-        let (_, program) = parse("LDA #$AB\
-JMP $1234,X").unwrap();
+        let (_, program) = parse("; This is comment\n
+LDA #$AB    ; this is comment\n
+JMP $1234,X\n
+;comment here
+").unwrap();
+        assert_eq!(program.instructions, vec![
+            Instruction { operator: Operator::LDA, operands: vec![Operand::ImmediateValue(Value::Word(0xAB))] },
+            Instruction { operator: Operator::JMP, operands: vec![Operand::Value(Value::DoubleWord(0x1234)), Operand::X] },
+        ]);
+
+        let (_, program) = parse("LDA #$AB\nJMP $1234,X").unwrap();
         assert_eq!(program.instructions, vec![
             Instruction { operator: Operator::LDA, operands: vec![Operand::ImmediateValue(Value::Word(0xAB))] },
             Instruction { operator: Operator::JMP, operands: vec![Operand::Value(Value::DoubleWord(0x1234)), Operand::X] },
