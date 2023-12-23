@@ -203,7 +203,7 @@ mod tests {
         let b = a as i8;
         assert_eq!(b, -1);
 
-        let (result, overflowed) = (0x7F as i8).overflowing_add(1);
+        let (result, overflowed) = 0x7Fi8.overflowing_add(1);
         assert_eq!(result, -128);
         assert!(overflowed);
     }
